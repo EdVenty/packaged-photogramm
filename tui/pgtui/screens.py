@@ -172,8 +172,10 @@ def _merge(base: dict, over: dict) -> dict:
 class NewJobScreen(ModalScreen[dict | None]):
     BINDINGS = [Binding("escape", "cancel", "Cancel"), Binding("ctrl+s", "submit", "Start")]
 
-    def __init__(self, datasets: list[dict], presets: dict, dataset_id: str | None = None):
+    def __init__(self, datasets: list[dict], presets: dict, dataset_id: str | None = None,
+                 modules: dict | None = None):
         super().__init__()
+        self.modules = modules or {}
         self.datasets = datasets
         self.presets = presets["presets"]
         self.defaults = presets["defaults"]
@@ -205,6 +207,12 @@ class NewJobScreen(ModalScreen[dict | None]):
         preset_opts = [(f"{k} — {v['description']}"[:90], k) for k, v in self.presets.items()]
         with Vertical(classes="dialog wide"):
             yield Label("Новая задача реконструкции", classes="title")
+            mod = Text("Модули на сервере: ")
+            for key, label in (("mesh", "меш"), ("splat", "сплаты"),
+                               ("water_splatting", "water-splatting"), ("refrac", "рефракц. COLMAP")):
+                ok = self.modules.get(key)
+                mod.append(f"{'✔' if ok else '✘'} {label}  ", style="green" if ok else "red")
+            yield Static(mod, id="modules")
             with VerticalScroll():
                 with Grid(classes="form"):
                     yield Label("Имя задачи")

@@ -19,30 +19,52 @@
 
 Проверка GPU в Docker: `docker run --rm --gpus all nvidia/cuda:12.4.1-base-ubuntu22.04 nvidia-smi`
 
-## Запуск
+## Установка и выбор модулей
+
+Систему можно ставить частично. **Ядро** (API, предобработка фото, COLMAP SfM) ставится всегда, остальное — модули:
+
+| Модуль | Сервис | Что даёт | Сборка |
+|--------|--------|----------|--------|
+| *core* | `api`, `worker-cpu`, `worker-sfm` | API, очередь, ресайз и цветокоррекция, позы камер и разреженное облако | быстро (готовый образ COLMAP) |
+| `mesh` | `worker-mvs` | плотное облако, меш, текстура (OpenMVS) | ~15–30 мин |
+| `splat` | `worker-splat` | Gaussian Splatting (nerfstudio splatfacto) | ~15–40 мин |
+| ↳ WaterSplatting | внутри `worker-splat` | подводные сплаты (`INSTALL_WATERSPLATTING=1`) | +5–15 мин |
+| `refrac` | `worker-sfm-refrac` | Refractive COLMAP для подводных корпусов | ~20–40 мин |
+
+Интерактивная установка спросит, какие модули нужны, определит архитектуру GPU (чтобы сборка шла быстрее),
+сгенерирует API-токен, запишет `.env`, затем соберёт и запустит выбранное:
 
 ```bash
-cp .env.example .env          # задайте PG_API_TOKEN, если порт доступен из сети
-# укажите CUDA_ARCHITECTURES / TORCH_CUDA_ARCH_LIST под свою GPU, чтобы сборка шла быстрее
-docker compose build          # один раз, долго
-docker compose up -d
+./install.sh
+```
+
+Неинтерактивно:
+
+```bash
+./install.sh -y --modules mesh,splat --water-splatting no   # без рефракции и WaterSplatting
+./install.sh -y --modules all                               # всё
+./install.sh -y --modules none                              # только ядро
+./install.sh --modules splat --no-build --no-start          # только переписать .env
+```
+
+Повторный запуск `install.sh` меняет набор модулей: новые соберутся, а снятые будут остановлены.
+
+Вручную то же самое делается через профили Docker Compose (`mesh`, `splat`, `refrac`, `all`) в `.env`:
+
+```bash
+cp .env.example .env
+# COMPOSE_PROFILES=mesh,splat      ← выбранные модули
+# INSTALL_WATERSPLATTING=1         ← WaterSplatting внутри модуля splat
+docker compose build && docker compose up -d
 curl http://localhost:8000/health
 ```
 
-Сервисы:
+Сервер знает, какие модули запущены (воркеры регистрируются сами). Если задача требует отсутствующего модуля,
+например пресет `underwater` без WaterSplatting или `full` без `mesh`, API отвечает `409 modules_missing`.
+TUI в этом случае предлагает всё равно поставить задачу в очередь (`queue_if_unavailable: true`): стадия подождёт,
+пока модуль не появится. Состав модулей виден в строке статуса TUI и в `GET /api/info`.
 
-| Сервис | Что делает | GPU |
-|--------|-----------|-----|
-| `api` | REST API, очередь, SQLite, отдаёт результаты | — |
-| `worker-cpu` | ресайз и подводная цветокоррекция | — |
-| `worker-sfm` | COLMAP SfM + undistortion | ✔ |
-| `worker-sfm-refrac` | Refractive COLMAP (подводные корпуса) | ✔ |
-| `worker-mvs` | OpenMVS: dense → mesh → texture | ✔ |
-| `worker-splat` | nerfstudio / WaterSplatting | ✔ |
-
-Если рефракционный режим не нужен, не собирайте его образ:
-`docker compose up -d --scale worker-sfm-refrac=0` (или удалите сервис из compose).
-Воркеры масштабируются через `--scale`, например при нескольких GPU: `--scale worker-splat=2`
+Воркеры масштабируются через `--scale`, например при нескольких GPU: `docker compose up -d --scale worker-splat=2`
 (чтобы назначить GPU конкретно, задайте `device_ids` в секции `deploy` нужного сервиса).
 
 Данные лежат в `./data` (настраивается через `PG_DATA_DIR`): `datasets/`, `jobs/<id>/outputs/`, `db.sqlite`.
@@ -129,7 +151,7 @@ python -m pytest -q tests
 
 ## Траблшутинг
 
-* **Воркер не берёт задачи:** проверьте вкладку «Воркеры» в TUI и `docker compose logs worker-sfm`. В строке статуса красным отмечены очереди, для которых нет онлайн-воркера.
+* **Воркер не берёт задачи:** проверьте вкладку «Воркеры» в TUI и `docker compose logs worker-sfm`. В строке статуса красным отмечены модули без онлайн-воркера; если модуль не установлен, добавьте его через `./install.sh`.
 * **`could not select device driver "nvidia"`:** не установлен или не настроен NVIDIA Container Toolkit.
 * **Мало зарегистрированных снимков:** включите `robust_features`, используйте `sequential` для съёмки с последовательным перекрытием, уменьшите `max_image_size`.
 * **Нехватка VRAM в сплатах:** увеличьте `splat.downscale_factor` (2–4) или используйте пресет `fast`.

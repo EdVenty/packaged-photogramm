@@ -77,7 +77,7 @@ preprocess  COLMAP    refrac       OpenMVS    nerfstudio +
 | `preprocess` | `cpu` | `underwater.enhance != none` или `preprocess.max_image_size > 0` | — |
 | `sfm` | `sfm` / `sfm_refrac` (если `underwater.camera = refractive`) | всегда | preprocess (если есть) |
 | `mvs` | `mvs` | pipeline ∈ {mesh, full} | sfm |
-| `splat` | `splat` | pipeline ∈ {splat, full} | sfm |
+| `splat` | `splat` / `splat_uw` (если `splat.method = water-splatting`) | pipeline ∈ {splat, full} | sfm |
 
 `mvs` и `splat` в режиме `full` идут параллельно на разных воркерах.
 
@@ -90,6 +90,23 @@ preprocess  COLMAP    refrac       OpenMVS    nerfstudio +
 * Падение: зависимые стадии → `skipped`. Независимые продолжают работу.
 * Повтор (`retry`): `failed|cancelled|skipped` → `pending`.
 * Lease: стадия `running` без heartbeat дольше `PG_STAGE_LEASE_SEC` (по умолчанию 180 с) → `failed` («воркер потерян»).
+
+### 3.4 Модули (выборочная установка)
+
+| Модуль (compose-профиль) | Сервисы | kinds |
+|--------------------------|---------|-------|
+| core (всегда) | `api`, `worker-cpu`, `worker-sfm` | `cpu`, `sfm` |
+| `mesh` | `worker-mvs` | `mvs` |
+| `splat` | `worker-splat` | `splat`, плюс `splat_uw` при `INSTALL_WATERSPLATTING=1` |
+| `refrac` | `worker-sfm-refrac` | `sfm_refrac` |
+| `all` | все перечисленные | |
+
+* Модули выбираются через `COMPOSE_PROFILES` в `.env`; `install.sh` делает это интерактивно или по флагам.
+* Опциональные возможности образа (`splat_uw`) записываются при сборке в `/etc/pgworker/extra-kinds`,
+  и агент воркера добавляет их к своим kinds.
+* `GET /api/info` → `modules: {core, mesh, splat, water_splatting, refrac}` строится по онлайн-воркерам.
+* `POST /api/jobs` отвечает `409 {code: modules_missing, missing_kinds, modules, message}`, если у какой-то
+  стадии нет онлайн-воркера. С `queue_if_unavailable: true` задача ставится в очередь и ждёт.
 
 ## 4. Параметры задачи
 
@@ -160,13 +177,13 @@ preprocess  COLMAP    refrac       OpenMVS    nerfstudio +
 | Метод | Путь | Описание |
 |------|------|----------|
 | GET | `/health` | Живость (без авторизации). |
-| GET | `/api/info` | Версия, пресеты, онлайн-воркеры и доступные kinds. |
+| GET | `/api/info` | Версия, пресеты, онлайн-воркеры, доступные kinds и модули. |
 | GET | `/api/presets` | Пресеты и параметры по умолчанию. |
 | GET/POST | `/api/datasets` | Список / создать `{name}`. |
 | GET/DELETE | `/api/datasets/{id}` | Детали (со списком изображений) / удалить (409 при активных задачах). |
 | POST | `/api/datasets/{id}/images` | multipart `files[]` — загрузка изображений. |
 | POST | `/api/datasets/{id}/archive` | multipart `file` — zip с изображениями. |
-| GET/POST | `/api/jobs` | Список / создать `{dataset_id, name, pipeline, preset, params}`. |
+| GET/POST | `/api/jobs` | Список / создать `{dataset_id, name, pipeline, preset, params, queue_if_unavailable}`; 409 `modules_missing`. |
 | GET/DELETE | `/api/jobs/{id}` | Детали со стадиями / удалить (409 если выполняется). |
 | POST | `/api/jobs/{id}/cancel` \| `/retry` | Отмена / повтор. |
 | GET | `/api/jobs/{id}/logs/{stage}?offset=N` | Инкрементальный лог; `offset=-1` — хвост 64 КБ. |

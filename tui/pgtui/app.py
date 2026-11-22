@@ -155,8 +155,12 @@ class PhotogrammApp(App):
         st = Text()
         st.append("● ", style="green")
         st.append(f"сервер v{info['version']}  воркеров онлайн: {info['workers_online']}  ")
-        for k in ("cpu", "sfm", "sfm_refrac", "mvs", "splat"):
-            st.append(f" {k}", style="green" if k in kinds else "red dim")
+        st.append(" модули:")
+        mods = info.get("modules", {})
+        for key, label in (("core", "ядро"), ("mesh", "меш"), ("splat", "сплаты"),
+                           ("water_splatting", "water-splat"), ("refrac", "рефракц.")):
+            st.append(f" {'✔' if mods.get(key) else '✘'}{label}",
+                      style="green" if mods.get(key) else "red dim")
         self._set_status(st)
 
         jrows = []
@@ -319,13 +323,14 @@ class PhotogrammApp(App):
         try:
             presets = self.client.presets()
             datasets = self.client.datasets()
+            modules = self.client.info().get("modules", {})
         except ApiError as e:
             self.call_from_thread(self.notify, str(e), severity="error")
             return
         if not datasets:
             self.call_from_thread(self.notify, "Сначала создайте датасет (u)", severity="warning")
             return
-        self.call_from_thread(self.push_screen, NewJobScreen(datasets, presets, dataset_id),
+        self.call_from_thread(self.push_screen, NewJobScreen(datasets, presets, dataset_id, modules),
                               self._submit_job)
 
     def _submit_job(self, payload: dict | None) -> None:
@@ -337,6 +342,17 @@ class PhotogrammApp(App):
         try:
             job = self.client.create_job(payload)
         except ApiError as e:
+            d = e.detail if isinstance(e.detail, dict) else {}
+            if e.status == 409 and d.get("code") == "modules_missing":
+                q = (f"Не запущены модули: {', '.join(d.get('modules', []))}.\n"
+                     f"Стадии ({', '.join(d.get('missing_kinds', []))}) будут ждать, пока "
+                     f"воркер не появится. Поставить задачу в очередь всё равно?")
+
+                def retry(ok: bool | None) -> None:
+                    if ok:
+                        self._create_job({**payload, "queue_if_unavailable": True})
+                self.call_from_thread(self.push_screen, ConfirmScreen(q), retry)
+                return
             self.call_from_thread(self.notify, str(e), severity="error", timeout=12)
             return
         self.call_from_thread(self.notify, f"Задача {job['id']} создана: "

@@ -16,7 +16,7 @@ from pydantic import BaseModel, ValidationError
 
 from . import __version__
 from .db import ACTIVE, DB, job_progress, job_status
-from .params import JobCreate, build_stages, presets_public, resolve_params
+from .params import KIND_MODULE, JobCreate, build_stages, presets_public, resolve_params
 from .storage import (Storage, extract_images_from_zip, is_image, list_tree, resolve_inside,
                       safe_name, save_stream, stream_zip)
 
@@ -145,6 +145,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             out.append(w)
         return out
 
+    def online_kinds(ws: list[dict[str, Any]] | None = None) -> set[str]:
+        ws = online_workers() if ws is None else ws
+        return {k for w in ws if w["online"] for k in w["kinds"]}
+
     # ------------------------------------------------------------------ public
     @app.get("/health")
     def health() -> dict[str, str]:
@@ -153,9 +157,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/api/info", dependencies=[Depends(auth)])
     def info() -> dict[str, Any]:
         ws = online_workers()
-        kinds = sorted({k for w in ws if w["online"] for k in w["kinds"]})
+        kinds = sorted(online_kinds(ws))
         return {"version": __version__, "presets": list(presets_public()),
-                "workers_online": sum(1 for w in ws if w["online"]), "kinds_online": kinds}
+                "workers_online": sum(1 for w in ws if w["online"]), "kinds_online": kinds,
+                "modules": {
+                    "core": {"sfm", "cpu"} <= set(kinds),
+                    "mesh": "mvs" in kinds,
+                    "splat": "splat" in kinds,
+                    "water_splatting": "splat_uw" in kinds,
+                    "refrac": "sfm_refrac" in kinds,
+                }}
 
     @app.get("/api/presets", dependencies=[Depends(auth)])
     def presets() -> dict[str, Any]:
@@ -234,6 +245,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         except (ValidationError, ValueError) as e:
             raise HTTPException(422, str(e)) from e
         stages = build_stages(body.pipeline, params)
+        missing = sorted({s["kind"] for s in stages} - online_kinds())
+        if missing and not body.queue_if_unavailable:
+            mods = sorted({KIND_MODULE.get(k, k) for k in missing})
+            raise HTTPException(409, {
+                "code": "modules_missing", "missing_kinds": missing, "modules": mods,
+                "message": "нет запущенных воркеров для: " + ", ".join(
+                    f"{k} (модуль {KIND_MODULE.get(k, k)})" for k in missing),
+            })
         name = body.name.strip() or f"{ds['name']}-{body.pipeline}"
         jid = db.create_job(name, body.dataset_id, body.pipeline, body.preset,
                             params.model_dump(), stages)

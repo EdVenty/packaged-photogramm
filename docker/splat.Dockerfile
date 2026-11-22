@@ -1,4 +1,4 @@
-# Splat worker: nerfstudio (splatfacto, gsplat) + WaterSplatting plugin.
+# Splat worker: nerfstudio (splatfacto, gsplat) + optional WaterSplatting plugin.
 # Versions follow the WaterSplatting README: CUDA 11.8, torch 2.1.2, nerfstudio 1.1.4.
 FROM nvidia/cuda:11.8.0-devel-ubuntu22.04
 
@@ -6,6 +6,7 @@ ARG TORCH_CUDA_ARCH_LIST="7.5;8.0;8.6;8.9"
 ARG WATER_SPLATTING_REPO=https://github.com/water-splatting/water-splatting.git
 ARG WATER_SPLATTING_REF=main
 ARG INSTALL_TCNN=1
+ARG INSTALL_WATERSPLATTING=1
 ENV DEBIAN_FRONTEND=noninteractive TORCH_CUDA_ARCH_LIST=${TORCH_CUDA_ARCH_LIST} \
     FORCE_CUDA=1 MAX_JOBS=4
 
@@ -26,11 +27,15 @@ RUN if [ "$INSTALL_TCNN" = "1" ]; then \
 
 RUN pip install --no-cache-dir nerfstudio==1.1.4 "numpy<2"
 
-RUN git clone ${WATER_SPLATTING_REPO} /opt/water-splatting \
- && cd /opt/water-splatting && git checkout ${WATER_SPLATTING_REF} \
- && git submodule update --init --recursive \
- && pip install --no-cache-dir --no-use-pep517 -e . \
- && pip install --no-cache-dir "numpy<2"
+# WaterSplatting: advertised to the API as the extra stage kind "splat_uw".
+RUN mkdir -p /etc/pgworker && if [ "$INSTALL_WATERSPLATTING" = "1" ]; then \
+      git clone ${WATER_SPLATTING_REPO} /opt/water-splatting \
+   && cd /opt/water-splatting && git checkout ${WATER_SPLATTING_REF} \
+   && git submodule update --init --recursive \
+   && pip install --no-cache-dir --no-use-pep517 -e . \
+   && pip install --no-cache-dir "numpy<2" \
+   && echo splat_uw > /etc/pgworker/extra-kinds; \
+    fi
 
 COPY worker/pgworker /opt/pgworker/pgworker
 # gsplat compiles its CUDA kernels on first use; cache them in a volume.

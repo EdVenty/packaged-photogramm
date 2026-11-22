@@ -81,7 +81,7 @@ def test_underwater_presets_build_stages(client, dataset):
                                        "preset": "underwater"})
     job = r.json()
     assert [(s["name"], s["kind"]) for s in job["stages"]] == [
-        ("preprocess", "cpu"), ("sfm", "sfm"), ("splat", "splat")]
+        ("preprocess", "cpu"), ("sfm", "sfm"), ("splat", "splat_uw")]
     assert job["params"]["splat"]["method"] == "water-splatting"
     assert job["params"]["underwater"]["enhance"] == "redcomp"
 
@@ -195,3 +195,30 @@ def test_delete_dataset_guard(client, dataset):
     client.post(f"/api/jobs/{job['id']}/cancel")
     assert client.delete(f"/api/datasets/{dataset}").status_code == 200
     assert client.get(f"/api/jobs/{job['id']}").status_code == 404
+
+
+def test_modules_missing_and_info(client, app, dataset):
+    db = app.state.db
+    db._conn.execute("DELETE FROM workers")
+    client.post("/internal/workers/heartbeat", json={"worker_id": "core", "kinds": ["cpu", "sfm"]})
+    client.post("/internal/workers/heartbeat", json={"worker_id": "spl", "kinds": ["splat"]})
+    mods = client.get("/api/info").json()["modules"]
+    assert mods == {"core": True, "mesh": False, "splat": True, "water_splatting": False,
+                    "refrac": False}
+    # splatfacto-only job is fine
+    assert client.post("/api/jobs", json={"dataset_id": dataset, "pipeline": "splat"}).status_code == 201
+    # full job needs the mesh module
+    r = client.post("/api/jobs", json={"dataset_id": dataset, "pipeline": "full"})
+    assert r.status_code == 409
+    d = r.json()["detail"]
+    assert d["code"] == "modules_missing" and d["missing_kinds"] == ["mvs"] and d["modules"] == ["mesh"]
+    # underwater preset needs WaterSplatting
+    r = client.post("/api/jobs", json={"dataset_id": dataset, "pipeline": "splat", "preset": "underwater"})
+    assert r.json()["detail"]["missing_kinds"] == ["splat_uw"]
+    # ...unless explicitly queued anyway
+    r = client.post("/api/jobs", json={"dataset_id": dataset, "pipeline": "full",
+                                       "queue_if_unavailable": True})
+    assert r.status_code == 201
+    # stale workers do not count
+    db._conn.execute("UPDATE workers SET last_seen=0")
+    assert client.get("/api/info").json()["modules"]["core"] is False
