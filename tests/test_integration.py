@@ -63,7 +63,7 @@ def _setup(url, preset=None, params=None, pipeline="full"):
         (folder / f"IMG_{i}.jpg").write_bytes(make_jpeg((10 + 40 * i, 120, 170), (320, 240)))
     assert api.upload_images(ds["id"], sorted(folder.glob("*.jpg"))) == 5
     job = api.create_job({"dataset_id": ds["id"], "pipeline": pipeline, "preset": preset,
-                          "params": params or {}})
+                          "params": params or {}, "queue_if_unavailable": True})
     return api, job
 
 
@@ -105,11 +105,15 @@ def test_underwater_refractive_pipeline(server, monkeypatch):
     api, job = _setup(url, preset="underwater-refractive-flat",
                       params={"preprocess": {"max_image_size": 160},
                               "underwater": {"enhance_for": "all"}})
-    assert [s["kind"] for s in job["stages"]] == ["cpu", "sfm_refrac", "mvs", "splat"]
+    assert [s["kind"] for s in job["stages"]] == ["cpu", "sfm_refrac", "mvs", "splat_uw"]
     # a standard sfm worker must not pick refractive work
     assert _agent(url, ["sfm"], "plain").run_once() is False
     agents = [_agent(url, ["cpu"], "cpu"), _agent(url, ["sfm_refrac"], "refrac"),
-              _agent(url, ["mvs"], "mvs"), _agent(url, ["splat"], "splat")]
+              _agent(url, ["mvs"], "mvs"), _agent(url, ["splat", "splat_uw"], "splat")]
+    # a splat worker without WaterSplatting must not take the underwater splat stage
+    plain_splat = _agent(url, ["splat"], "plain-splat")
+    j = _run_all(url, job["id"], api, agents[:3] + [plain_splat])
+    assert {s["name"]: s["status"] for s in j["stages"]}["splat"] == "pending"
     j = _run_all(url, job["id"], api, agents)
     assert j["status"] == "done", [(s["name"], s["status"], s["error"]) for s in j["stages"]]
 
@@ -169,3 +173,22 @@ def test_cancel_kills_running_process(server, monkeypatch, tmp_path):
     j = api.job(job["id"])
     assert j["status"] == "cancelled"
     assert [s["status"] for s in j["stages"]] == ["cancelled", "cancelled"]
+
+
+def test_extra_kinds_file(tmp_path, monkeypatch):
+    from pgworker import agent as agent_mod
+    f = tmp_path / "extra-kinds"
+    f.write_text("splat_uw\n")
+    monkeypatch.setenv("PG_EXTRA_KINDS_FILE", str(f))
+    captured = {}
+
+    class FakeAgent:
+        def __init__(self, client, kinds, wid, poll_interval):
+            captured["kinds"] = kinds
+
+        def run_forever(self):
+            pass
+
+    monkeypatch.setattr(agent_mod, "Agent", FakeAgent)
+    agent_mod.main(["--kinds", "splat", "--api", "http://x"])
+    assert captured["kinds"] == ["splat", "splat_uw"]

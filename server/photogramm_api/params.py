@@ -95,6 +95,20 @@ class JobCreate(BaseModel):
     pipeline: Pipeline = "full"
     preset: str | None = None
     params: dict[str, Any] = Field(default_factory=dict)
+    # Queue the job even if no online worker can run one of its stages (module not installed
+    # or not started yet). Otherwise the API answers 409 "modules_missing".
+    queue_if_unavailable: bool = False
+
+
+# Stage kind -> installable module (docker compose profile) that provides a worker for it.
+KIND_MODULE = {
+    "cpu": "core",
+    "sfm": "core",
+    "sfm_refrac": "refrac",
+    "mvs": "mesh",
+    "splat": "splat",
+    "splat_uw": "splat (+WaterSplatting)",
+}
 
 
 PRESETS: dict[str, dict[str, Any]] = {
@@ -174,7 +188,8 @@ def build_stages(pipeline: str, params: JobParams) -> list[dict[str, Any]]:
     if pipeline in ("mesh", "full"):
         stages.append({"name": "mvs", "kind": "mvs", "deps": ["sfm"]})
     if pipeline in ("splat", "full"):
-        stages.append({"name": "splat", "kind": "splat", "deps": ["sfm"]})
+        kind = "splat_uw" if params.splat.method == "water-splatting" else "splat"
+        stages.append({"name": "splat", "kind": kind, "deps": ["sfm"]})
     return stages
 
 

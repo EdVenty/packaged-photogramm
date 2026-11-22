@@ -13,7 +13,10 @@ ProgressCb = Callable[[int, int], None]  # (done_bytes, total_bytes)
 
 
 class ApiError(Exception):
-    pass
+    def __init__(self, message: str, status: int = 0, detail: Any = None):
+        super().__init__(message)
+        self.status = status
+        self.detail = detail
 
 
 class _ProgressReader:
@@ -56,7 +59,8 @@ class ApiClient:
                 detail = r.json().get("detail", r.text)
             except Exception:  # noqa: BLE001
                 detail = r.text
-            raise ApiError(f"HTTP {r.status_code}: {detail}")
+            msg = detail.get("message", detail) if isinstance(detail, dict) else detail
+            raise ApiError(f"HTTP {r.status_code}: {msg}", r.status_code, detail)
         if r.status_code == 204 or not r.content:
             return None
         return r.json()

@@ -142,6 +142,13 @@ def main(argv: list[str] | None = None) -> None:
     args = ap.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     kinds = [k.strip() for k in args.kinds.split(",") if k.strip()]
+    # Images can advertise optional capabilities (e.g. the splat image built with
+    # WaterSplatting adds "splat_uw") via a file baked in at build time.
+    extra = os.environ.get("PG_EXTRA_KINDS_FILE", "/etc/pgworker/extra-kinds")
+    if os.path.isfile(extra):
+        with open(extra) as f:
+            kinds += [k.strip() for k in f.read().replace("\n", ",").split(",")
+                      if k.strip() and k.strip() not in kinds]
     if not kinds:
         raise SystemExit("no kinds configured (PG_WORKER_KINDS)")
     wid = args.id or f"{'+'.join(kinds)}@{socket.gethostname()}"

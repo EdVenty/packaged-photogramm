@@ -43,6 +43,13 @@ REST API + загрузка через TUI; Python (FastAPI + Textual); выхо
 - [x] Тест preprocess (OpenCV) и smoke-тест TUI (Textual pilot).
 - [x] README: установка, запуск, подводный режим, траблшутинг.
 
+## Этап 7. Выборочная установка модулей
+- [x] Compose-профили `mesh`, `splat`, `refrac`, `all`; ядро всегда; `INSTALL_WATERSPLATTING` для splat-образа.
+- [x] Отдельный kind `splat_uw` для WaterSplatting; агент читает доп. kinds из образа.
+- [x] `/api/info.modules`, 409 `modules_missing` + `queue_if_unavailable`.
+- [x] `install.sh`: интерактивный выбор, автоопределение compute capability, генерация токена, остановка снятых модулей.
+- [x] TUI: модули в строке статуса и в мастере задачи, подтверждение постановки в очередь без модуля.
+
 ## Риски
 | Риск | Митигация |
 |------|-----------|

@@ -41,8 +41,13 @@ def client(app):
         yield c
 
 
+ALL_KINDS = ["cpu", "sfm", "sfm_refrac", "mvs", "splat", "splat_uw"]
+
+
 @pytest.fixture
 def dataset(client):
+    # a worker advertising every module, so job creation is not rejected as "modules_missing"
+    client.post("/internal/workers/heartbeat", json={"worker_id": "registry", "kinds": ALL_KINDS})
     r = client.post("/api/datasets", json={"name": "scene"})
     did = r.json()["id"]
     files = [("files", (f"img{i:02d}.jpg", make_jpeg((20 * i % 255, 100, 150)), "image/jpeg"))
