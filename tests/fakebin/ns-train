@@ -1,0 +1,19 @@
+#!/usr/bin/env python3
+import os, sys
+from pathlib import Path
+args = sys.argv[1:]
+calls = os.environ.get("FAKE_CALLS")
+if calls:
+    with open(calls, "a") as f:
+        f.write("ns-train " + " ".join(args) + "\n")
+method = args[0]
+def opt(n):
+    return args[args.index(n) + 1]
+data = Path(opt("--data"))
+assert (data / "sparse" / "cameras.txt").exists()
+assert "colmap" in args
+d = Path(opt("--output-dir")) / opt("--experiment-name") / method / opt("--timestamp")
+d.mkdir(parents=True, exist_ok=True)
+(d / "config.yml").write_text(f"method: {method}\n")
+for s in (100, 500, 1000):
+    print(f"{s:<10} ({s/10:.2f}%)        12 ms")

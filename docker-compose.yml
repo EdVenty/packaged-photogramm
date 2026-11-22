@@ -1,0 +1,120 @@
+name: photogramm
+
+x-worker: &worker
+  restart: unless-stopped
+  depends_on:
+    api:
+      condition: service_healthy
+  volumes:
+    - ${PG_DATA_DIR:-./data}:/data
+  environment: &worker-env
+    PG_API_URL: http://api:8000
+    PG_API_TOKEN: ${PG_API_TOKEN:-}
+
+x-gpu: &gpu
+  deploy:
+    resources:
+      reservations:
+        devices:
+          - driver: nvidia
+            count: all
+            capabilities: [gpu]
+
+services:
+  api:
+    build: { context: ., dockerfile: docker/api.Dockerfile }
+    image: photogramm/api:latest
+    restart: unless-stopped
+    ports:
+      - "${PG_BIND:-0.0.0.0}:${PG_PORT:-8000}:8000"
+    volumes:
+      - ${PG_DATA_DIR:-./data}:/data
+    environment:
+      PG_API_TOKEN: ${PG_API_TOKEN:-}
+      PG_STAGE_LEASE_SEC: ${PG_STAGE_LEASE_SEC:-180}
+
+  # Image preprocessing / underwater colour correction (CPU)
+  worker-cpu:
+    <<: *worker
+    build: { context: ., dockerfile: docker/cpu.Dockerfile }
+    image: photogramm/worker-cpu:latest
+    environment:
+      <<: *worker-env
+      PG_WORKER_KINDS: cpu
+
+  # Structure-from-Motion: COLMAP (CUDA)
+  worker-sfm:
+    <<: [*worker, *gpu]
+    build:
+      context: .
+      dockerfile: docker/colmap.Dockerfile
+      args:
+        COLMAP_IMAGE: ${COLMAP_IMAGE:-colmap/colmap:latest}
+    image: photogramm/worker-sfm:latest
+    environment:
+      <<: *worker-env
+      PG_WORKER_KINDS: sfm
+
+  # Refractive Structure-from-Motion for underwater housings (flat/dome port)
+  worker-sfm-refrac:
+    <<: [*worker, *gpu]
+    build:
+      context: .
+      dockerfile: docker/colmap-refrac.Dockerfile
+      args:
+        CUDA_ARCHITECTURES: ${CUDA_ARCHITECTURES:-75;80;86;89}
+        COLMAP_UW_REF: ${COLMAP_UW_REF:-underwater}
+    image: photogramm/worker-sfm-refrac:latest
+    environment:
+      <<: *worker-env
+      PG_WORKER_KINDS: sfm_refrac
+
+  # Dense reconstruction, meshing, texturing: OpenMVS (CUDA)
+  worker-mvs:
+    <<: [*worker, *gpu]
+    build:
+      context: .
+      dockerfile: docker/openmvs.Dockerfile
+      args:
+        CUDA_ARCHITECTURES: ${CUDA_ARCHITECTURES:-75;80;86;89}
+        OPENMVS_BRANCH: ${OPENMVS_BRANCH:-develop}
+    image: photogramm/worker-mvs:latest
+    environment:
+      <<: *worker-env
+      PG_WORKER_KINDS: mvs
+
+  # Gaussian splatting: nerfstudio splatfacto + WaterSplatting
+  worker-splat:
+    <<: [*worker, *gpu]
+    build:
+      context: .
+      dockerfile: docker/splat.Dockerfile
+      args:
+        TORCH_CUDA_ARCH_LIST: ${TORCH_CUDA_ARCH_LIST:-7.5;8.0;8.6;8.9}
+        INSTALL_TCNN: ${INSTALL_TCNN:-1}
+    image: photogramm/worker-splat:latest
+    shm_size: 8gb
+    volumes:
+      - ${PG_DATA_DIR:-./data}:/data
+      - splat-cache:/cache
+    environment:
+      <<: *worker-env
+      PG_WORKER_KINDS: splat
+
+  # TUI in a container: `docker compose run --rm tui`
+  tui:
+    profiles: [tui]
+    build: { context: ., dockerfile: docker/tui.Dockerfile }
+    image: photogramm/tui:latest
+    stdin_open: true
+    tty: true
+    depends_on: [api]
+    working_dir: /host
+    volumes:
+      - ${PG_HOST_DIR:-.}:/host
+    environment:
+      PG_SERVER: http://api:8000
+      PG_TOKEN: ${PG_API_TOKEN:-}
+
+volumes:
+  splat-cache:
